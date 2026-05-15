@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# career-ops batch runner — standalone orchestrator for claude -p workers
-# Reads batch-input.tsv, delegates each offer to a claude -p worker,
+# career-ops batch runner — standalone orchestrator for headless AI CLI workers
+# Reads batch-input.tsv, delegates each offer to a Codex worker by default,
 # tracks state in batch-state.tsv for resumability.
 #
-# NOTE: This script is Claude Code-specific. It uses claude -p with
-# --dangerously-skip-permissions and --append-system-prompt-file flags
-# that are not available in other CLIs. Multi-CLI support is out of scope
-# for now — contributions welcome.
+# Codex uses the local Codex login. For ChatGPT OAuth, run `codex login`
+# before starting a batch. Claude Code remains available with --cli claude.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -27,21 +25,30 @@ STATE_LOCK_TIMEOUT_SECONDS=30
 MAIN_PID="${BASHPID:-$$}"
 
 # Defaults
+AGENT_CLI="${CAREER_OPS_AGENT_CLI:-codex}"
 PARALLEL=1
 DRY_RUN=false
 RETRY_FAILED=false
 START_FROM=0
 MAX_RETRIES=2
 MIN_SCORE=0
+CODEX_MODEL="${CAREER_OPS_CODEX_MODEL:-}"
+CODEX_SANDBOX="${CAREER_OPS_CODEX_SANDBOX:-workspace-write}"
+CODEX_APPROVAL_POLICY="${CAREER_OPS_CODEX_APPROVAL_POLICY:-never}"
+CODEX_ENABLE_SEARCH="${CAREER_OPS_CODEX_SEARCH:-true}"
+CODEX_EPHEMERAL="${CAREER_OPS_CODEX_EPHEMERAL:-true}"
+CODEX_NETWORK_ACCESS="${CAREER_OPS_CODEX_NETWORK_ACCESS:-true}"
+CODEX_REQUIRE_OAUTH="${CAREER_OPS_CODEX_REQUIRE_OAUTH:-true}"
 
 usage() {
   cat <<'USAGE'
-career-ops batch runner — process job offers in batch via claude -p workers
-Uses your default Claude model (Claude Max subscription).
+career-ops batch runner — process job offers in batch via headless AI workers
+Defaults to Codex using your local ChatGPT OAuth login (`codex login`).
 
 Usage: batch-runner.sh [OPTIONS]
 
 Options:
+  --cli CLI            Worker CLI: codex or claude (default: codex)
   --parallel N         Number of parallel workers (default: 1)
   --dry-run            Show what would be processed, don't execute
   --retry-failed       Only retry offers marked as "failed" in state
@@ -49,6 +56,12 @@ Options:
   --max-retries N      Max retry attempts per offer (default: 2)
   --min-score N        Skip PDF/tracker for offers scoring below N (default: 0 = off)
   -h, --help           Show this help
+
+Codex environment:
+  CAREER_OPS_CODEX_MODEL            Optional Codex model override
+  CAREER_OPS_CODEX_REQUIRE_OAUTH    Require ChatGPT OAuth login (default: true)
+  CAREER_OPS_CODEX_SEARCH           Enable Codex web search (default: true)
+  CAREER_OPS_CODEX_NETWORK_ACCESS   Allow worker shell network access (default: true)
 
 Files:
   batch-input.tsv      Input offers (id, url, source, notes)
@@ -61,8 +74,11 @@ Examples:
   # Dry run to see pending offers
   ./batch-runner.sh --dry-run
 
-  # Process all pending
+  # Process all pending with Codex OAuth
   ./batch-runner.sh
+
+  # Process with Claude Code instead
+  ./batch-runner.sh --cli claude
 
   # Retry only failed offers
   ./batch-runner.sh --retry-failed
@@ -75,6 +91,7 @@ USAGE
 # Parse arguments
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --cli) AGENT_CLI="$2"; shift 2 ;;
     --parallel) PARALLEL="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --retry-failed) RETRY_FAILED=true; shift ;;
@@ -124,10 +141,39 @@ check_prerequisites() {
     exit 1
   fi
 
-  if ! command -v claude &>/dev/null; then
-    echo "ERROR: 'claude' CLI not found in PATH."
-    exit 1
-  fi
+  case "$AGENT_CLI" in
+    codex)
+      if ! command -v codex &>/dev/null; then
+        echo "ERROR: 'codex' CLI not found in PATH."
+        echo "Install Codex, then run: codex login"
+        exit 1
+      fi
+
+      local login_status
+      if ! login_status=$(codex login status 2>&1); then
+        echo "ERROR: Codex is not logged in."
+        echo "Run: codex login"
+        exit 1
+      fi
+
+      if [[ "$CODEX_REQUIRE_OAUTH" == "true" && "$login_status" != *"ChatGPT"* ]]; then
+        echo "ERROR: Codex is logged in, but not with ChatGPT OAuth."
+        echo "Run: codex logout && codex login"
+        echo "Or set CAREER_OPS_CODEX_REQUIRE_OAUTH=false to allow a non-OAuth Codex login."
+        exit 1
+      fi
+      ;;
+    claude)
+      if ! command -v claude &>/dev/null; then
+        echo "ERROR: 'claude' CLI not found in PATH."
+        exit 1
+      fi
+      ;;
+    *)
+      echo "ERROR: Unsupported worker CLI '$AGENT_CLI'. Use: codex or claude."
+      exit 1
+      ;;
+  esac
 
   mkdir -p "$LOGS_DIR" "$TRACKER_DIR" "$REPORTS_DIR"
 }
@@ -294,6 +340,45 @@ update_state() {
   run_with_state_lock update_state_unlocked "$@"
 }
 
+run_worker() {
+  local prompt="$1" resolved_prompt="$2" worker_prompt_file="$3" log_file="$4"
+
+  case "$AGENT_CLI" in
+    codex)
+      local -a cmd=(codex)
+      if [[ "$CODEX_ENABLE_SEARCH" == "true" ]]; then
+        cmd+=(--search)
+      fi
+      if [[ -n "$CODEX_MODEL" ]]; then
+        cmd+=(-m "$CODEX_MODEL")
+      fi
+      cmd+=(
+        exec
+        -C "$PROJECT_DIR"
+        --sandbox "$CODEX_SANDBOX"
+        --ask-for-approval "$CODEX_APPROVAL_POLICY"
+        --skip-git-repo-check
+      )
+      if [[ "$CODEX_EPHEMERAL" == "true" ]]; then
+        cmd+=(--ephemeral)
+      fi
+      if [[ "$CODEX_NETWORK_ACCESS" == "true" ]]; then
+        cmd+=(-c sandbox_workspace_write.network_access=true)
+      fi
+      cmd+=(-)
+
+      "${cmd[@]}" < "$worker_prompt_file" > "$log_file" 2>&1
+      ;;
+    claude)
+      claude -p \
+        --dangerously-skip-permissions \
+        --append-system-prompt-file "$resolved_prompt" \
+        "$prompt" \
+        > "$log_file" 2>&1
+      ;;
+  esac
+}
+
 reserve_report_num_unlocked() {
   local id="$1" url="$2" started="$3" retries="$4"
 
@@ -327,7 +412,7 @@ process_offer() {
 
   # Build the prompt with placeholders replaced
   local prompt
-  prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-F + report .md + PDF + tracker line."
+  prompt="Procesa esta oferta de empleo. Ejecuta el pipeline completo: evaluación A-G + report .md + PDF + tracker line."
   prompt="$prompt URL: $url"
   prompt="$prompt JD file: $jd_file"
   prompt="$prompt Report number: $report_num"
@@ -338,6 +423,7 @@ process_offer() {
 
   # Prepare system prompt with placeholders resolved
   local resolved_prompt="$BATCH_DIR/.resolved-prompt-${id}.md"
+  local worker_prompt_file="$BATCH_DIR/.worker-prompt-${id}.md"
   # Escape sed delimiter characters in variables to prevent substitution breakage
   local esc_url esc_jd_file esc_report_num esc_date esc_id
   esc_url="${url//\\/\\\\}"
@@ -355,16 +441,20 @@ process_offer() {
     -e "s|{{ID}}|${esc_id}|g" \
     "$PROMPT_FILE" > "$resolved_prompt"
 
-  # Launch claude -p worker (uses default model from Claude Max subscription)
+  {
+    printf '%s\n\n' "Use the instructions below as the complete worker prompt for this batch job."
+    printf '%s\n\n' "---"
+    sed -n '1,$p' "$resolved_prompt"
+    printf '\n%s\n\n' "---"
+    printf '%s\n' "$prompt"
+  } > "$worker_prompt_file"
+
+  # Launch headless worker.
   local exit_code=0
-  claude -p \
-    --dangerously-skip-permissions \
-    --append-system-prompt-file "$resolved_prompt" \
-    "$prompt" \
-    > "$log_file" 2>&1 || exit_code=$?
+  run_worker "$prompt" "$resolved_prompt" "$worker_prompt_file" "$log_file" || exit_code=$?
 
   # Cleanup resolved prompt
-  rm -f "$resolved_prompt"
+  rm -f "$resolved_prompt" "$worker_prompt_file"
 
   local completed_at
   completed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -373,7 +463,7 @@ process_offer() {
     # Try to extract score from worker output
     local score="-"
     local score_match
-   score_match=$(sed -nE 's/.*"score":[[:space:]]*([0-9.]+).*/\1/p' "$log_file" 2>/dev/null | head -1 || true)
+    score_match=$(sed -nE 's/.*"score":[[:space:]]*([0-9.]+).*/\1/p' "$log_file" 2>/dev/null | head -1 || true)
     if [[ -n "$score_match" ]]; then
       score="$score_match"
     fi
@@ -383,7 +473,7 @@ process_offer() {
       if (( $(echo "$score < $MIN_SCORE" | bc -l) )); then
         update_state "$id" "$url" "skipped" "$started_at" "$completed_at" "$report_num" "$score" "below-min-score" "$retries"
         echo "    ⏭️  Skipped (score: $score < min-score: $MIN_SCORE)"
-        continue
+        return 0
       fi
     fi
 
@@ -466,6 +556,7 @@ main() {
   fi
 
   echo "=== career-ops batch runner ==="
+  echo "Worker CLI: $AGENT_CLI"
   echo "Parallel: $PARALLEL | Max retries: $MAX_RETRIES"
   echo "Input: $total_input offers"
   echo ""

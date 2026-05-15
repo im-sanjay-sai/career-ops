@@ -265,9 +265,11 @@ When spawning headless workers for batch processing, use the appropriate command
 | Claude Code | `claude -p "prompt"` |
 | Gemini CLI | `gemini -p "prompt"` |
 | Copilot CLI | `copilot -p "prompt"` |
-| Codex | `codex exec "prompt"` |
+| Codex | `codex --search exec -C . --sandbox workspace-write --ask-for-approval never "prompt"` |
 | OpenCode | `opencode run "prompt"` |
 | Qwen | `qwen -p "prompt"` |
+
+The bundled `batch/batch-runner.sh` defaults to Codex and requires a local ChatGPT OAuth login (`codex login`) unless `CAREER_OPS_CODEX_REQUIRE_OAUTH=false` is set. Use `--cli claude` to run legacy Claude Code workers.
 
 ## Stack and Conventions
 

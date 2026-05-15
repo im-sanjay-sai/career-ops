@@ -161,7 +161,9 @@ const systemFiles = [
   'modes/_shared.md', 'modes/_profile.template.md',
   'modes/oferta.md', 'modes/pdf.md', 'modes/scan.md',
   'templates/states.yml', 'templates/cv-template.html',
+  '.agents/skills/career-ops/SKILL.md',
   '.claude/skills/career-ops/SKILL.md',
+  'batch/batch-runner.sh',
 ];
 
 for (const f of systemFiles) {
@@ -299,9 +301,37 @@ for (const section of requiredSections) {
   }
 }
 
-// ── 10. VERSION FILE ─────────────────────────────────────────────
+// ── 10. CODEX BATCH INTEGRATION ─────────────────────────────────
 
-console.log('\n10. Version file');
+console.log('\n10. Codex batch integration');
+
+const batchRunner = readFile('batch/batch-runner.sh');
+const codexBatchChecks = [
+  ['Defaults to Codex workers', 'AGENT_CLI="${CAREER_OPS_AGENT_CLI:-codex}"'],
+  ['Checks Codex OAuth login', 'codex login status'],
+  ['Uses Codex exec headless mode', 'cmd+=(\n        exec'],
+  ['Allows worker network access in workspace sandbox', 'sandbox_workspace_write.network_access=true'],
+  ['Keeps Claude fallback', '--cli claude'],
+];
+
+for (const [label, needle] of codexBatchChecks) {
+  if (batchRunner.includes(needle)) {
+    pass(label);
+  } else {
+    fail(`Missing Codex batch behavior: ${label}`);
+  }
+}
+
+const bashSyntax = run('bash', ['-n', 'batch/batch-runner.sh']);
+if (bashSyntax !== null) {
+  pass('batch-runner.sh syntax OK');
+} else {
+  fail('batch-runner.sh has syntax errors');
+}
+
+// ── 11. VERSION FILE ─────────────────────────────────────────────
+
+console.log('\n11. Version file');
 
 if (fileExists('VERSION')) {
   const version = readFile('VERSION').trim();

@@ -1,6 +1,8 @@
 # Batch Processing
 
-Process multiple job offers in parallel via headless workers. Each worker runs the full evaluation pipeline (A-F report + PDF + tracker line) autonomously. See the **Headless / Batch Mode** table in `AGENTS.md` for the correct command per CLI.
+Process multiple job offers in parallel via headless workers. Each worker runs the full evaluation pipeline (A-F report + PDF + tracker line) autonomously.
+
+The standalone runner defaults to Codex workers using your local ChatGPT OAuth login. Run `codex login` once, then `codex login status` should report a ChatGPT login. Claude Code remains available with `--cli claude`.
 
 ## Quick Start
 
@@ -18,10 +20,16 @@ Process multiple job offers in parallel via headless workers. Each worker runs t
    ./batch/batch-runner.sh --dry-run
    ```
 
-3. **Run the batch**:
+3. **Run the batch with Codex OAuth**:
 
    ```bash
    ./batch/batch-runner.sh
+   ```
+
+   To use Claude Code workers instead:
+
+   ```bash
+   ./batch/batch-runner.sh --cli claude
    ```
 
 4. **Results** are automatically merged into `data/applications.md` and verified with `verify-pipeline.mjs` at the end of the run.
@@ -30,11 +38,24 @@ Process multiple job offers in parallel via headless workers. Each worker runs t
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--cli CLI` | `codex` | Worker CLI: `codex` or `claude` |
 | `--parallel N` | `1` | Number of concurrent headless workers |
 | `--dry-run` | off | Preview pending offers without processing |
 | `--retry-failed` | off | Only retry offers marked as `failed` in state |
 | `--start-from N` | `0` | Skip offers with ID below N |
 | `--max-retries N` | `2` | Max retry attempts per offer before giving up |
+
+## Codex Settings
+
+The runner keeps Codex in workspace-write mode, enables web search, and allows worker shell network access so workers can fetch job pages and compensation data.
+
+| Environment variable | Default | Description |
+|----------------------|---------|-------------|
+| `CAREER_OPS_CODEX_MODEL` | unset | Optional Codex model override |
+| `CAREER_OPS_CODEX_REQUIRE_OAUTH` | `true` | Require `codex login` with ChatGPT OAuth |
+| `CAREER_OPS_CODEX_SEARCH` | `true` | Enable Codex web search for workers |
+| `CAREER_OPS_CODEX_NETWORK_ACCESS` | `true` | Allow worker shell network access |
+| `CAREER_OPS_CODEX_EPHEMERAL` | `true` | Avoid persisting worker sessions |
 
 ## Directory Layout
 
@@ -52,7 +73,7 @@ batch/
 ## How It Works
 
 1. **batch-runner.sh** reads `batch-input.tsv` and `batch-state.tsv` to determine which offers need processing.
-2. For each pending offer, it assigns a report number and launches a headless worker with `batch-prompt.md` as the system prompt (placeholders like `{{URL}}`, `{{REPORT_NUM}}` are resolved).
+2. For each pending offer, it assigns a report number and launches a headless worker with `batch-prompt.md` as the worker prompt (placeholders like `{{URL}}`, `{{REPORT_NUM}}` are resolved).
 3. Each worker evaluates the offer, writes a report to `reports/`, generates a PDF to `output/`, and writes a tracker TSV to `tracker-additions/`.
 4. After all workers finish, batch-runner calls `merge-tracker.mjs` to merge TSVs into `data/applications.md` and runs `verify-pipeline.mjs` to check integrity.
 
@@ -75,6 +96,6 @@ A PID-based lock file (`batch-runner.pid`) prevents concurrent batch runs. If a 
 
 ## Prerequisites
 
-- Your CLI in PATH (see **Headless / Batch Mode** table in `AGENTS.md`)
+- Codex in PATH and logged in with ChatGPT OAuth (`codex login`), or Claude Code in PATH when using `--cli claude`
 - Node.js >= 18, Playwright chromium installed (`npm run doctor` to verify)
 - `batch-input.tsv` with at least one offer

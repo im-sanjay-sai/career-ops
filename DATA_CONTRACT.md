@@ -58,7 +58,9 @@ These files contain system logic, scripts, templates, and instructions that impr
 | `dashboard/*` | Go TUI dashboard |
 | `templates/*` | Base templates |
 | `fonts/*` | Self-hosted fonts |
-| `.claude/skills/*` | Skill definitions |
+| `.agents/skills/*` | Shared skill definitions for Codex and other open-agent CLIs |
+| `.claude/skills/*` | Claude Code skill definitions |
+| `.qwen/skills/*` | Qwen skill definitions |
 | `docs/*` | Documentation |
 | `VERSION` | Current version number |
 | `DATA_CONTRACT.md` | This file |

@@ -2,7 +2,8 @@
 
 ## Prerequisites
 
-- [Claude Code](https://claude.ai/code) installed and configured
+- [Codex](https://developers.openai.com/codex) installed and authenticated with ChatGPT OAuth (`codex login`)
+- Or another AI coding CLI that follows `AGENTS.md`
 - Node.js 18+ (for PDF generation and utility scripts)
 - (Optional) Go 1.21+ (for the dashboard TUI)
 
@@ -44,13 +45,23 @@ Edit `portals.yml`:
 
 ### 5. Start using
 
-Open Claude Code in this directory:
+Open Codex in this directory:
 
 ```bash
-claude
+codex
 ```
 
-Then paste a job offer URL or description. Career-ops will automatically evaluate it, generate a report, create a tailored PDF, and track it.
+Then ask Codex to use career-ops with a job offer URL or description. Career-ops will evaluate it, generate a report, create a tailored PDF, and track it.
+
+For batch processing, the runner uses Codex OAuth by default:
+
+```bash
+codex login status
+./batch/batch-runner.sh --dry-run
+./batch/batch-runner.sh --parallel 2
+```
+
+To use Claude Code for batch workers instead, run `./batch/batch-runner.sh --cli claude`.
 
 ## Available Commands
 
@@ -63,6 +74,8 @@ Then paste a job offer URL or description. Career-ops will automatically evaluat
 | Batch evaluate | `/career-ops batch` |
 | Check tracker status | `/career-ops tracker` |
 | Fill application form | `/career-ops apply` |
+
+In Codex, the equivalent is natural language, for example: `Use career-ops scan` or `Use career-ops to evaluate this URL: ...`.
 
 ## Verify Setup
 
